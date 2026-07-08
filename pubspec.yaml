@@ -1,0 +1,40 @@
+name: smart_study_tracker
+description: Smart Study Time Tracker for Student Productivity
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  provider: ^6.1.1
+  shared_preferences: ^2.2.2
+  fl_chart: ^0.66.2
+  intl: ^0.19.0
+  uuid: ^4.3.3
+  percent_indicator: ^4.2.3
+  google_fonts: ^6.1.0
+  cupertino_icons: ^1.0.2
+  firebase_core: ^4.11.0
+  firebase_auth: ^6.5.4
+  cloud_firestore: ^6.6.0
+  firebase_storage: ^13.4.3
+  firebase_analytics: ^12.4.3
+  http: ^1.2.1
+  file_picker: ^8.0.3
+  image_picker: ^1.0.7
+  pdf: ^3.10.8
+  printing: ^5.11.1
+  path_provider: ^2.1.2
+  firebase_messaging: any
+  flutter_local_notifications: ^17.0.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
