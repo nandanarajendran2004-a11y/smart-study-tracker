@@ -1,4 +1,6 @@
-import 'dart:convert';
+import 'dart:io' show File;
+import 'dart:typed_data';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
@@ -8,6 +10,7 @@ import '../../providers/auth_provider.dart';
 import '../../utils/constants.dart';
 import '../../services/openai_service.dart';
 import '../../services/firestore_service.dart';
+import '../../services/file_text_extractor.dart';
 
 class StudyAssistantScreen extends StatefulWidget {
   const StudyAssistantScreen({super.key});
@@ -66,56 +69,77 @@ class _StudyAssistantScreenState extends State<StudyAssistantScreen> with Single
       final result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
         allowedExtensions: ['pdf', 'txt', 'docx'],
+        withData: kIsWeb,  // On web, we need bytes directly
       );
 
       if (result != null && result.files.isNotEmpty) {
         final file = result.files.first;
         setState(() {
-          _uploadStatus = 'Uploading: ${file.name}...';
+          _uploadStatus = 'Reading: ${file.name}...';
         });
 
-        final auth = Provider.of<AuthProvider>(context, listen: false);
-        final uid = auth.user?.uid;
-        if (uid == null) return;
-
-        final bytes = file.bytes;
+        // Read file bytes: on web use file.bytes, on mobile/desktop read from path
+        Uint8List? bytes = file.bytes;
+        if (bytes == null && file.path != null) {
+          bytes = await File(file.path!).readAsBytes();
+        }
         if (bytes == null) {
-          throw Exception("Could not read file bytes");
+          throw Exception('Could not read file. Please try again.');
         }
 
-        // Upload to Firebase Storage
-        final ref = FirebaseStorage.instance
-            .ref()
-            .child('study_materials')
-            .child('$uid-${DateTime.now().millisecondsSinceEpoch}-${file.name}');
+        // Set title from filename if empty
+        if (_titleController.text.isEmpty) {
+          _titleController.text = file.name.replaceAll(RegExp(r'\.[^.]+$'), '');
+        }
 
-        final uploadTask = ref.putData(bytes);
-        final snapshot = await uploadTask;
-        final downloadUrl = await snapshot.ref.getDownloadURL();
-
+        // Extract text content from the file for AI analysis
         setState(() {
-          _uploadedFileUrl = downloadUrl;
-          _uploadStatus = 'Successfully uploaded: ${file.name}! ✓';
-          if (_titleController.text.isEmpty) {
-            _titleController.text = file.name.replaceAll(RegExp(r'\.[^.]+$'), '');
-          }
+          _uploadStatus = 'Extracting text from ${file.name}...';
         });
 
-        // If it is a TXT file, we can read its contents to the text area
-        if (file.extension == 'txt') {
-          final content = utf8.decode(bytes);
+        try {
+          final extractedText = FileTextExtractor.extractText(
+            bytes: bytes,
+            extension: file.extension ?? '',
+          );
           setState(() {
-            _notesController.text = content;
+            _notesController.text = extractedText;
+            _uploadStatus = 'Successfully read: ${file.name} ✓';
           });
-        } else {
+        } catch (e) {
           setState(() {
-            _notesController.text = "[File uploaded: ${file.name}. AI will analyze this file's context.]";
+            _uploadStatus =
+                'Could not extract text automatically ($e). '
+                'Please paste the notes manually below.';
           });
+        }
+
+        // Upload to Firebase Storage in the background (non-blocking)
+        // This is optional — the AI analysis uses the extracted text, not the URL
+        final auth = Provider.of<AuthProvider>(context, listen: false);
+        final uid = auth.user?.uid;
+        if (uid != null) {
+          try {
+            final ref = FirebaseStorage.instance
+                .ref()
+                .child('study_materials')
+                .child('$uid-${DateTime.now().millisecondsSinceEpoch}-${file.name}');
+            ref.putData(bytes).then((snapshot) async {
+              final downloadUrl = await snapshot.ref.getDownloadURL();
+              if (mounted) {
+                setState(() {
+                  _uploadedFileUrl = downloadUrl;
+                });
+              }
+            });
+          } catch (_) {
+            // Storage upload is optional — don't block the user
+          }
         }
       }
     } catch (e) {
       setState(() {
-        _uploadStatus = 'Failed to upload file: $e';
+        _uploadStatus = 'Failed to read file: $e';
       });
     }
   }

@@ -1,55 +1,137 @@
 import 'dart:convert';
-import 'package:http/http.dart' as http;
+import 'package:google_generative_ai/google_generative_ai.dart';
 
 class OpenAIService {
-  static const String _baseUrl = 'https://api.openai.com/v1/chat/completions';
-
-  // Helper method to make requests to OpenAI Chat Completion
+  // ---------------------------------------------------------------------------
+  // Core chat completion – drop-in replacement for the old OpenAI HTTP call.
+  //
+  // Returns a Map that mirrors the OpenAI response shape so every call-site
+  // (e.g. exam_manager_screen.dart) that reads
+  //   response['choices'][0]['message']['content']
+  // continues to work unchanged.
+  // ---------------------------------------------------------------------------
   Future<Map<String, dynamic>> callChatCompletion({
     required String apiKey,
     required List<Map<String, String>> messages,
     bool responseJson = false,
   }) async {
     if (apiKey.trim().isEmpty) {
-      throw Exception('OpenAI API Key is empty. Please set it in Settings.');
-    }
-
-    final headers = {
-      'Content-Type': 'application/json',
-      'Authorization': 'Bearer $apiKey',
-    };
-
-    final body = {
-      'model': 'gpt-4o-mini',
-      'messages': messages,
-      'temperature': 0.3,
-    };
-
-    if (responseJson) {
-      body['response_format'] = {'type': 'json_object'};
+      throw Exception('Gemini API Key is empty. Please set it in Settings.');
     }
 
     try {
-      final response = await http.post(
-        Uri.parse(_baseUrl),
-        headers: headers,
-        body: jsonEncode(body),
+      // Build the Gemini model with the same low-temperature behaviour.
+      final model = GenerativeModel(
+        model: 'gemini-2.5-flash',
+        apiKey: apiKey,
+        generationConfig: GenerationConfig(
+          temperature: 0.3,
+          responseMimeType: responseJson ? 'application/json' : null,
+        ),
       );
 
-      if (response.statusCode == 200) {
-        final decoded = jsonDecode(utf8.decode(response.bodyBytes));
-        return decoded;
-      } else {
-        final err = jsonDecode(response.body) as Map<String, dynamic>;
-        final errMsg = err['error']?['message'] ?? 'Status code: ${response.statusCode}';
-        throw Exception(errMsg);
+      // Translate the OpenAI-style messages list into Gemini Content objects.
+      // 'system' messages become a systemInstruction; everything else maps to
+      // 'user' / 'model' roles.
+      Content? systemInstruction;
+      final List<Content> history = [];
+
+      for (final msg in messages) {
+        final role = msg['role'] ?? 'user';
+        final text = msg['content'] ?? '';
+
+        if (role == 'system') {
+          // Accumulate system text – Gemini accepts a single system instruction.
+          if (systemInstruction == null) {
+            systemInstruction = Content.system(text);
+          } else {
+            // Merge additional system messages into the existing one.
+            systemInstruction = Content.system(
+              '${systemInstruction.parts.map((p) => p is TextPart ? p.text : '').join('\n')}\n$text',
+            );
+          }
+        } else if (role == 'assistant') {
+          history.add(Content.model([TextPart(text)]));
+        } else {
+          // 'user' or anything else → user turn
+          history.add(Content('user', [TextPart(text)]));
+        }
       }
+
+      // The last user message is sent as the new prompt.
+      final lastContent = history.isNotEmpty
+          ? history.last
+          : Content('user', [TextPart('')]);
+
+      final lastText = lastContent.parts
+          .whereType<TextPart>()
+          .map((p) => p.text)
+          .join('\n');
+
+      // If there's a system instruction, create a new model with it.
+      final modelWithSystem = systemInstruction != null
+          ? GenerativeModel(
+              model: 'gemini-2.5-flash',
+              apiKey: apiKey,
+              systemInstruction: systemInstruction,
+              generationConfig: GenerationConfig(
+                temperature: 0.3,
+                responseMimeType: responseJson ? 'application/json' : null,
+              ),
+            )
+          : model;
+
+      final chatWithSystem = modelWithSystem.startChat(
+        history: history.length > 1 ? history.sublist(0, history.length - 1) : [],
+      );
+
+      final geminiResponse = await chatWithSystem.sendMessage(
+        Content('user', [TextPart(lastText)]),
+      );
+
+      final responseText = geminiResponse.text ?? '';
+
+      // Return in the same OpenAI-compatible shape so all call-sites keep
+      // working (e.g. response['choices'][0]['message']['content']).
+      return {
+        'choices': [
+          {
+            'message': {
+              'role': 'assistant',
+              'content': responseText,
+            },
+          },
+        ],
+      };
+    } on GenerativeAIException catch (e) {
+      throw Exception('Gemini API error: ${e.message}');
     } catch (e) {
-      throw Exception('Failed to connect to OpenAI: $e');
+      throw Exception('Failed to connect to Gemini: $e');
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Helper: strip markdown code fences (```json … ```) that Gemini may wrap
+  // around JSON output and then decode.
+  // ---------------------------------------------------------------------------
+  Map<String, dynamic> _cleanAndDecodeJson(String raw) {
+    String cleaned = raw.trim();
+
+    // Remove leading ```json or ``` and trailing ```
+    final fencePattern = RegExp(r'^```(?:json)?\s*\n?', caseSensitive: false);
+    if (fencePattern.hasMatch(cleaned)) {
+      cleaned = cleaned.replaceFirst(fencePattern, '');
+    }
+    if (cleaned.endsWith('```')) {
+      cleaned = cleaned.substring(0, cleaned.length - 3).trimRight();
+    }
+
+    return jsonDecode(cleaned) as Map<String, dynamic>;
+  }
+
+  // ---------------------------------------------------------------------------
   // 1. AI TIMETABLE GENERATION
+  // ---------------------------------------------------------------------------
   Future<Map<String, dynamic>> generateTimetable({
     required String apiKey,
     required List<Map<String, String>> exams, // List of {subject, date, difficulty}
@@ -85,10 +167,12 @@ class OpenAIService {
     );
 
     final String text = response['choices'][0]['message']['content'];
-    return jsonDecode(text);
+    return _cleanAndDecodeJson(text);
   }
 
+  // ---------------------------------------------------------------------------
   // 2. AI STUDY ASSISTANT (Summary, Notes, Definitions, Flashcards, Formula Sheet)
+  // ---------------------------------------------------------------------------
   Future<Map<String, dynamic>> processStudyMaterial({
     required String apiKey,
     required String title,
@@ -117,10 +201,12 @@ class OpenAIService {
     );
 
     final String text = response['choices'][0]['message']['content'];
-    return jsonDecode(text);
+    return _cleanAndDecodeJson(text);
   }
 
+  // ---------------------------------------------------------------------------
   // 3. AI QUIZ GENERATION
+  // ---------------------------------------------------------------------------
   Future<Map<String, dynamic>> generateQuiz({
     required String apiKey,
     required String title,
@@ -185,10 +271,12 @@ class OpenAIService {
     );
 
     final String text = response['choices'][0]['message']['content'];
-    return jsonDecode(text);
+    return _cleanAndDecodeJson(text);
   }
 
+  // ---------------------------------------------------------------------------
   // 4. AI ANSWER EVALUATION
+  // ---------------------------------------------------------------------------
   Future<Map<String, dynamic>> evaluateAnswer({
     required String apiKey,
     required String question,
@@ -220,6 +308,6 @@ class OpenAIService {
     );
 
     final String text = response['choices'][0]['message']['content'];
-    return jsonDecode(text);
+    return _cleanAndDecodeJson(text);
   }
 }

@@ -42,7 +42,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                 mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                 children: [
                   pw.Text('StudyTracker Performance Report',
-                      style: const pw.TextStyle(
+                      style: pw.TextStyle(
                           fontSize: 24, fontWeight: pw.FontWeight.bold)),
                   pw.Text(
                       'Date: ${DateTime.now().day}/${DateTime.now().month}/${DateTime.now().year}',
@@ -54,7 +54,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
             // Profile info
             pw.Text('Academic profile',
-                style: const pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
+                style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
             pw.Divider(),
             pw.Text('Name: ${user?.name ?? 'Student'}'),
             pw.Text('Course: ${user?.course ?? 'N/A'}'),
@@ -64,7 +64,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
             // Overall statistics
             pw.Text('Productivity Metrics',
-                style: const pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
+                style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
             pw.Divider(),
             pw.Row(
               mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
@@ -79,7 +79,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
             // Subject wise details
             pw.Text('Subject-wise Analysis',
-                style: const pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
+                style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
             pw.Divider(),
             pw.TableHelper.fromTextArray(
               headers: ['Subject', 'Study Time (Minutes)', 'Hours Studied', 'Goal Target (Hours/Wk)'],
@@ -93,7 +93,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
             // AI Insights
             pw.Text('AI Suggestions & Insights',
-                style: const pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
+                style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
             pw.Divider(),
             pw.Bullet(text: 'Focus Score: ${study.productivityScore.toStringAsFixed(0)}%'),
             pw.Bullet(

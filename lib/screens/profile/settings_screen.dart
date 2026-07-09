@@ -198,7 +198,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final settings = user?.settings ?? {};
     final isDarkMode = settings['darkMode'] == true;
     final isNotifEnabled = settings['notificationsEnabled'] != false;
-    final language = settings['language'] ?? 'English';
+    // final language = settings['language'] ?? 'English';
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -335,61 +335,61 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 auth.updateSettings(newSettings);
               },
             ),
-            SwitchListTile(
-              title: Text('Daily Study Reminder', style: GoogleFonts.poppins(fontSize: 14, fontWeight: FontWeight.w500)),
-              subtitle: Text(
-                _reminderEnabled
-                    ? 'Reminder at ${ReminderService.formatTime(_reminderHour, _reminderMinute)}'
-                    : 'Get a daily push to start studying',
-                style: GoogleFonts.poppins(fontSize: 11),
-              ),
-              value: _reminderEnabled,
-              activeThumbColor: AppColors.primary,
-              onChanged: (val) async {
-                setState(() => _reminderEnabled = val);
-                await ReminderService().setReminderPreferences(
-                  enabled: val,
-                  hour: _reminderHour,
-                  minute: _reminderMinute,
-                );
-              },
-            ),
-            if (_reminderEnabled)
-              ListTile(
-                leading: const Icon(Icons.access_time, color: AppColors.primary),
-                title: Text('Reminder Time', style: GoogleFonts.poppins(fontSize: 14, fontWeight: FontWeight.w500)),
-                subtitle: Text(
-                  ReminderService.formatTime(_reminderHour, _reminderMinute),
-                  style: GoogleFonts.poppins(fontSize: 11),
-                ),
-                trailing: const Icon(Icons.chevron_right_rounded, color: Colors.grey),
-                onTap: _pickReminderTime,
-              ),
+            // SwitchListTile(
+            //   title: Text('Daily Study Reminder', style: GoogleFonts.poppins(fontSize: 14, fontWeight: FontWeight.w500)),
+            //   subtitle: Text(
+            //     _reminderEnabled
+            //         ? 'Reminder at ${ReminderService.formatTime(_reminderHour, _reminderMinute)}'
+            //         : 'Get a daily push to start studying',
+            //     style: GoogleFonts.poppins(fontSize: 11),
+            //   ),
+            //   value: _reminderEnabled,
+            //   activeThumbColor: AppColors.primary,
+            //   onChanged: (val) async {
+            //     setState(() => _reminderEnabled = val);
+            //     await ReminderService().setReminderPreferences(
+            //       enabled: val,
+            //       hour: _reminderHour,
+            //       minute: _reminderMinute,
+            //     );
+            //   },
+            // ),
+            // if (_reminderEnabled)
+            //   ListTile(
+            //     leading: const Icon(Icons.access_time, color: AppColors.primary),
+            //     title: Text('Reminder Time', style: GoogleFonts.poppins(fontSize: 14, fontWeight: FontWeight.w500)),
+            //     subtitle: Text(
+            //       ReminderService.formatTime(_reminderHour, _reminderMinute),
+            //       style: GoogleFonts.poppins(fontSize: 11),
+            //     ),
+            //     trailing: const Icon(Icons.chevron_right_rounded, color: Colors.grey),
+            //     onTap: _pickReminderTime,
+            //   ),
             const Divider(),
 
             // ── Preferences Section ──
-            _buildSectionHeader('Preferences'),
-            ListTile(
-              title: Text('Language', style: GoogleFonts.poppins(fontSize: 14, fontWeight: FontWeight.w500)),
-              subtitle: Text('Change application display language', style: GoogleFonts.poppins(fontSize: 11)),
-              trailing: DropdownButton<String>(
-                value: language,
-                onChanged: (String? newVal) {
-                  if (newVal != null) {
-                    final newSettings = Map<String, dynamic>.from(settings);
-                    newSettings['language'] = newVal;
-                    auth.updateSettings(newSettings);
-                  }
-                },
-                items: <String>['English', 'Spanish', 'French', 'German']
-                    .map<DropdownMenuItem<String>>((String val) {
-                  return DropdownMenuItem<String>(
-                    value: val,
-                    child: Text(val, style: GoogleFonts.poppins(fontSize: 13)),
-                  );
-                }).toList(),
-              ),
-            ),
+            // _buildSectionHeader('Preferences'),
+            // ListTile(
+            //   title: Text('Language', style: GoogleFonts.poppins(fontSize: 14, fontWeight: FontWeight.w500)),
+            //   subtitle: Text('Change application display language', style: GoogleFonts.poppins(fontSize: 11)),
+            //   trailing: DropdownButton<String>(
+            //     value: language,
+            //     onChanged: (String? newVal) {
+            //       if (newVal != null) {
+            //         final newSettings = Map<String, dynamic>.from(settings);
+            //         newSettings['language'] = newVal;
+            //         auth.updateSettings(newSettings);
+            //       }
+            //     },
+            //     items: <String>['English', 'Spanish', 'French', 'German']
+            //         .map<DropdownMenuItem<String>>((String val) {
+            //       return DropdownMenuItem<String>(
+            //         value: val,
+            //         child: Text(val, style: GoogleFonts.poppins(fontSize: 13)),
+            //       );
+            //     }).toList(),
+            //   ),
+            // ),
             const Divider(),
 
             // ── Privacy & Data Section ──

@@ -1,11 +1,15 @@
+import 'dart:io' show File;
+import 'dart:typed_data';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
+import 'package:file_picker/file_picker.dart';
 import '../../providers/auth_provider.dart';
 import '../../utils/constants.dart';
 import '../../services/openai_service.dart';
 import '../../services/firestore_service.dart';
-
+import '../../services/file_text_extractor.dart';
 class QuizGeneratorScreen extends StatefulWidget {
   const QuizGeneratorScreen({super.key});
 
@@ -21,13 +25,21 @@ class _QuizGeneratorScreenState extends State<QuizGeneratorScreen> {
   bool _isLoading = false;
   bool _isPlaying = false;
   
+  // File upload states
+  String _uploadStatus = '';
+  String _uploadedRawText = '';
+  String _uploadedTitle = '';
+  
   List<Map<String, dynamic>> _quizzesList = [];
+  List<Map<String, dynamic>> _materialsList = [];
   Map<String, dynamic>? _selectedMaterial;
   Map<String, dynamic>? _activeQuiz;
   
   // Interactive player states
   int _currentQuestionIndex = 0;
   final Map<int, String> _userAnswers = {};
+  // Track which questions have been "submitted" (answer locked in)
+  final Set<int> _answeredQuestions = {};
   
   // AI evaluation states
   bool _isEvaluating = false;
@@ -50,14 +62,60 @@ class _QuizGeneratorScreenState extends State<QuizGeneratorScreen> {
       final quizzes = await _firestoreService.getQuizzesStream(uid).first;
       setState(() {
         _quizzesList = quizzes;
-        if (materials.isNotEmpty) {
-          _selectedMaterial = materials.first;
+        _materialsList = materials;
+        if (_materialsList.isNotEmpty && _selectedMaterial == null) {
+          _selectedMaterial = _materialsList.first;
         }
       });
     } catch (e) {
       debugPrint("Error loading quiz resources: $e");
     } finally {
       setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _pickAndUploadFile() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['pdf', 'txt', 'docx'],
+        withData: kIsWeb,
+      );
+
+      if (result != null && result.files.isNotEmpty) {
+        final file = result.files.first;
+        setState(() {
+          _uploadStatus = 'Reading: ${file.name}...';
+        });
+
+        // Read file bytes: on web use file.bytes, on mobile/desktop read from path
+        Uint8List? bytes = file.bytes;
+        if (bytes == null && file.path != null) {
+          bytes = await File(file.path!).readAsBytes();
+        }
+        if (bytes == null) {
+          throw Exception('Could not read file. Please try again.');
+        }
+
+        // Extract text content
+        final extractedText = FileTextExtractor.extractText(
+          bytes: bytes,
+          extension: file.extension ?? '',
+        );
+
+        final title = file.name.replaceAll(RegExp(r'\.[^.]+$'), '');
+
+        setState(() {
+          _uploadedRawText = extractedText;
+          _uploadedTitle = title;
+          _selectedMaterial = null; // Deselect dropdown — use uploaded file instead
+          _uploadStatus = 'Ready: ${file.name} ✓';
+        });
+      }
+    } catch (e) {
+      setState(() {
+        _uploadStatus = 'Failed: $e';
+      });
     }
   }
 
@@ -75,9 +133,26 @@ class _QuizGeneratorScreenState extends State<QuizGeneratorScreen> {
       return;
     }
 
-    if (_selectedMaterial == null) {
+    // Determine the material source: uploaded file or selected from dropdown
+    String materialTitle;
+    String materialText;
+
+    if (_uploadedRawText.isNotEmpty) {
+      materialTitle = _uploadedTitle.isNotEmpty ? _uploadedTitle : 'Uploaded material';
+      materialText = _uploadedRawText;
+    } else if (_selectedMaterial != null) {
+      materialTitle = _selectedMaterial!['title'] ?? 'Study material';
+      materialText = _selectedMaterial!['rawText'] ?? '';
+    } else {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please select a study material from the history first.')),
+        const SnackBar(content: Text('Please upload a file or select a study material first.')),
+      );
+      return;
+    }
+
+    if (materialText.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('The selected material has no text content. Please try another.')),
       );
       return;
     }
@@ -87,13 +162,13 @@ class _QuizGeneratorScreenState extends State<QuizGeneratorScreen> {
     try {
       final quizResult = await _openaiService.generateQuiz(
         apiKey: apiKey,
-        title: _selectedMaterial!['title'] ?? 'Study material',
-        materialText: _selectedMaterial!['rawText'] ?? '',
+        title: materialTitle,
+        materialText: materialText,
         difficulty: _difficulty,
       );
 
       final quizData = {
-        'id': UniqueKey().hashCode.toString(),
+        'id': 'quiz_${DateTime.now().millisecondsSinceEpoch}',
         'title': quizResult['quizTitle'] ?? 'AI Practice Quiz',
         'difficulty': _difficulty,
         'questions': quizResult['questions'] ?? [],
@@ -107,7 +182,12 @@ class _QuizGeneratorScreenState extends State<QuizGeneratorScreen> {
         _isPlaying = true;
         _currentQuestionIndex = 0;
         _userAnswers.clear();
+        _answeredQuestions.clear();
         _evaluationResult = null;
+        // Clear uploaded file state after successful generation
+        _uploadedRawText = '';
+        _uploadedTitle = '';
+        _uploadStatus = '';
       });
 
       _loadMaterialsAndQuizzes();
@@ -254,14 +334,83 @@ class _QuizGeneratorScreenState extends State<QuizGeneratorScreen> {
                 value: _selectedMaterial,
                 isExpanded: true,
                 onChanged: (val) {
-                  setState(() => _selectedMaterial = val);
+                  setState(() {
+                    _selectedMaterial = val;
+                    // Clear uploaded file when selecting from dropdown
+                    _uploadedRawText = '';
+                    _uploadedTitle = '';
+                    _uploadStatus = '';
+                  });
                 },
-                items: _quizzesList.isEmpty
+                items: _materialsList.isEmpty
                     ? []
-                    : _quizzesList.map((q) => DropdownMenuItem<Map<String, dynamic>>(
-                          value: q,
-                          child: Text(q['title'] ?? 'Material', style: GoogleFonts.poppins(fontSize: 13)),
+                    : _materialsList.map((m) => DropdownMenuItem<Map<String, dynamic>>(
+                          value: m,
+                          child: Text(m['title'] ?? 'Material', style: GoogleFonts.poppins(fontSize: 13)),
                         )).toList(),
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          // OR divider
+          Row(
+            children: [
+              Expanded(child: Divider(color: Colors.grey.shade300)),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: Text('OR', style: GoogleFonts.poppins(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.grey)),
+              ),
+              Expanded(child: Divider(color: Colors.grey.shade300)),
+            ],
+          ),
+          const SizedBox(height: 16),
+
+          // File upload button
+          InkWell(
+            onTap: _pickAndUploadFile,
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 20),
+              decoration: BoxDecoration(
+                color: _uploadedRawText.isNotEmpty
+                    ? AppColors.primary.withValues(alpha: 0.05)
+                    : Colors.white,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: _uploadedRawText.isNotEmpty
+                      ? AppColors.primary
+                      : AppColors.primary.withValues(alpha: 0.3),
+                  style: BorderStyle.solid,
+                ),
+              ),
+              child: Column(
+                children: [
+                  Icon(
+                    _uploadedRawText.isNotEmpty ? Icons.check_circle : Icons.cloud_upload_outlined,
+                    color: AppColors.primary,
+                    size: 32,
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    _uploadedRawText.isNotEmpty
+                        ? 'File loaded: $_uploadedTitle'
+                        : 'Upload Study File (PDF, DOCX, TXT)',
+                    style: GoogleFonts.poppins(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 12,
+                      color: AppColors.primary,
+                    ),
+                  ),
+                  if (_uploadStatus.isNotEmpty) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      _uploadStatus,
+                      style: GoogleFonts.poppins(fontSize: 10, color: Colors.grey.shade600),
+                      textAlign: TextAlign.center,
+                    ),
+                  ]
+                ],
               ),
             ),
           ),
@@ -321,6 +470,7 @@ class _QuizGeneratorScreenState extends State<QuizGeneratorScreen> {
                         _isPlaying = true;
                         _currentQuestionIndex = 0;
                         _userAnswers.clear();
+                        _answeredQuestions.clear();
                         _evaluationResult = null;
                       });
                     },
@@ -369,6 +519,7 @@ class _QuizGeneratorScreenState extends State<QuizGeneratorScreen> {
 
     final currentAnswer = _userAnswers[_currentQuestionIndex] ?? '';
     final isLast = _currentQuestionIndex == questions.length - 1;
+    final bool isAnswered = _answeredQuestions.contains(_currentQuestionIndex);
 
     return Padding(
       padding: const EdgeInsets.all(20.0),
@@ -407,7 +558,87 @@ class _QuizGeneratorScreenState extends State<QuizGeneratorScreen> {
           // Question Input options based on type
           Expanded(
             child: SingleChildScrollView(
-              child: _buildQuestionInput(type, options, currentAnswer),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _buildQuestionInput(type, options, currentAnswer, correctAns, isAnswered),
+
+                  // Show correct answer and explanation after answering
+                  if (isAnswered && (type == 'mcq' || type == 'true_false' || type == 'fill_in_the_blank')) ...[
+                    const SizedBox(height: 16),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: currentAnswer == correctAns
+                            ? Colors.green.shade50
+                            : Colors.red.shade50,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: currentAnswer == correctAns
+                              ? Colors.green.shade200
+                              : Colors.red.shade200,
+                        ),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Icon(
+                                currentAnswer == correctAns
+                                    ? Icons.check_circle
+                                    : Icons.cancel,
+                                color: currentAnswer == correctAns
+                                    ? Colors.green
+                                    : Colors.red,
+                                size: 20,
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  currentAnswer == correctAns
+                                      ? 'Correct! ✨'
+                                      : 'Incorrect',
+                                  style: GoogleFonts.poppins(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 14,
+                                    color: currentAnswer == correctAns
+                                        ? Colors.green.shade800
+                                        : Colors.red.shade800,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          if (currentAnswer != correctAns) ...[
+                            const SizedBox(height: 8),
+                            Text(
+                              'Correct Answer: $correctAns',
+                              style: GoogleFonts.poppins(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.green.shade800,
+                              ),
+                            ),
+                          ],
+                          if (explanation.isNotEmpty) ...[
+                            const SizedBox(height: 8),
+                            Text(
+                              'Explanation: $explanation',
+                              style: GoogleFonts.poppins(
+                                fontSize: 12,
+                                color: Colors.grey.shade700,
+                                height: 1.4,
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ],
+                ],
+              ),
             ),
           ),
 
@@ -462,6 +693,19 @@ class _QuizGeneratorScreenState extends State<QuizGeneratorScreen> {
               else
                 const SizedBox(),
 
+              // Submit Answer Button (for MCQ, true/false, fill_in_the_blank)
+              if (!isAnswered && (type == 'mcq' || type == 'true_false' || type == 'fill_in_the_blank') && currentAnswer.isNotEmpty)
+                ElevatedButton.icon(
+                  icon: const Icon(Icons.check, size: 16),
+                  label: Text('Submit Answer', style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.teal, foregroundColor: Colors.white),
+                  onPressed: () {
+                    setState(() {
+                      _answeredQuestions.add(_currentQuestionIndex);
+                    });
+                  },
+                ),
+
               // Short Answer Evaluation Button
               if ((type == 'short_answer' || type == 'long_answer') && _evaluationResult == null)
                 ElevatedButton.icon(
@@ -501,30 +745,64 @@ class _QuizGeneratorScreenState extends State<QuizGeneratorScreen> {
     );
   }
 
-  Widget _buildQuestionInput(String type, List options, String currentAnswer) {
+  Widget _buildQuestionInput(String type, List options, String currentAnswer, String correctAnswer, bool isAnswered) {
     if (type == 'mcq' || type == 'true_false') {
       return Column(
         children: options.map((opt) {
-          final isSelected = currentAnswer == opt;
+          final optStr = opt.toString();
+          final isSelected = currentAnswer == optStr;
+          final isCorrectOption = optStr == correctAnswer;
+
+          // Determine colors based on answer state
+          Color bgColor;
+          Color borderColor;
+          if (isAnswered) {
+            if (isCorrectOption) {
+              bgColor = Colors.green.shade50;
+              borderColor = Colors.green;
+            } else if (isSelected && !isCorrectOption) {
+              bgColor = Colors.red.shade50;
+              borderColor = Colors.red;
+            } else {
+              bgColor = Colors.white;
+              borderColor = Colors.grey.shade200;
+            }
+          } else {
+            bgColor = isSelected ? AppColors.primary.withValues(alpha: 0.08) : Colors.white;
+            borderColor = isSelected ? AppColors.primary : Colors.grey.shade200;
+          }
+
           return Container(
             margin: const EdgeInsets.only(bottom: 10),
             decoration: BoxDecoration(
-              color: isSelected ? AppColors.primary.withValues(alpha: 0.08) : Colors.white,
+              color: bgColor,
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: isSelected ? AppColors.primary : Colors.grey.shade200),
+              border: Border.all(color: borderColor, width: isAnswered && (isCorrectOption || (isSelected && !isCorrectOption)) ? 2 : 1),
             ),
             child: RadioListTile<String>(
-              title: Text(opt.toString(), style: GoogleFonts.poppins(fontSize: 13)),
-              value: opt.toString(),
-              activeColor: AppColors.primary,
+              title: Row(
+                children: [
+                  Expanded(child: Text(optStr, style: GoogleFonts.poppins(fontSize: 13))),
+                  if (isAnswered && isCorrectOption)
+                    const Icon(Icons.check_circle, color: Colors.green, size: 20),
+                  if (isAnswered && isSelected && !isCorrectOption)
+                    const Icon(Icons.cancel, color: Colors.red, size: 20),
+                ],
+              ),
+              value: optStr,
+              activeColor: isAnswered
+                  ? (isCorrectOption ? Colors.green : Colors.red)
+                  : AppColors.primary,
               groupValue: currentAnswer.isEmpty ? null : currentAnswer,
-              onChanged: (val) {
-                if (val != null) {
-                  setState(() {
-                    _userAnswers[_currentQuestionIndex] = val;
-                  });
-                }
-              },
+              onChanged: isAnswered
+                  ? null
+                  : (val) {
+                      if (val != null) {
+                        setState(() {
+                          _userAnswers[_currentQuestionIndex] = val;
+                        });
+                      }
+                    },
             ),
           );
         }).toList(),
@@ -538,6 +816,7 @@ class _QuizGeneratorScreenState extends State<QuizGeneratorScreen> {
         TextField(
           controller: controller,
           maxLines: type == 'long_answer' ? 6 : 2,
+          readOnly: isAnswered && type == 'fill_in_the_blank',
           decoration: InputDecoration(
             hintText: type == 'fill_in_the_blank' ? 'Type the blank answer' : 'Write your detailed answer here...',
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
